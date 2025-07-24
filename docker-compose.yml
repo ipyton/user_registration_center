@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7.0-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    ports:
+      - "9092:9092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=info
+      - JWT_SECRET=example-secret-change-me
+      - REDIS_URL=redis://redis:6379
+      - COORDINATOR_PORT=3000
+      - VNODE_COUNT=1024
+      - KAFKA_BROKERS=kafka:29092
+    command: npm run start:coordinator
+
+  wsnode1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
+    depends_on:
+      coordinator:
+        condition: service_started
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=info
+      - JWT_SECRET=example-secret-change-me
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node-1
+      - ASSIGNED_VNODES=0,1,2,3,4,5,6,7
+      - WS_PORT=8080
+      - KAFKA_BROKERS=kafka:29092
+      - HEARTBEAT_INTERVAL=30000
+    command: npm run start:node
+
+  wsnode2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8080"
+    depends_on:
+      coordinator:
+        condition: service_started
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=info
+      - JWT_SECRET=example-secret-change-me
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node-2
+      - ASSIGNED_VNODES=8,9,10,11,12,13,14,15
+      - WS_PORT=8080
+      - KAFKA_BROKERS=kafka:29092
+      - HEARTBEAT_INTERVAL=30000
+    command: npm run start:node
+
+volumes:
+  redis_data: 
